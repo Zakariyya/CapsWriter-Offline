@@ -4,7 +4,7 @@ LLM 角色配置 Dataclass
 使用 Dataclass 替代字典，提供类型安全和更好的 IDE 支持
 """
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 
 @dataclass
@@ -45,6 +45,7 @@ class RoleConfig:
     # Toast 弹窗配置
     toast_initial_width: float = 0.5              # Toast 窗口初始宽度（0.5 = 50% 屏幕宽度）
     toast_initial_height: int = 0                 # Toast 窗口初始高度（0 表示自动计算）
+    toast_y_offset: int = 0                       # Toast 初始位置的 Y 轴偏移（负值向上）
     toast_font_family: str = ''                   # Toast 字体（空字符串表示使用系统默认）
     toast_font_size: int = 14                     # Toast 字体大小
     toast_font_color: str = 'white'               # Toast 字体颜色
@@ -60,6 +61,14 @@ class RoleConfig:
 
     # 高级选项
     extra_options: Dict[str, Any] = field(default_factory=dict)  # 额外的 API 参数
+
+    # MCP 配置（仅用于需要工具调用的角色）
+    enable_mcp: bool = False                     # 是否启用 MCP 工具调用
+    mcp_base_url: str = ''                       # MCP HTTP 基地址
+    mcp_auth_token: str = ''                     # MCP 授权 Token（Bearer）
+    mcp_timeout: float = 30.0                    # MCP 请求超时（秒）
+    mcp_tool_whitelist: Optional[List[str]] = None  # 限定可用工具（None/空表示全部）
+    mcp_servers: Optional[List[Dict[str, Any]]] = None  # 多 MCP 配置列表（支持 headers）
 
     # 提示词前缀
     prompt_prefix_hotwords: str = '热词列表：'      # 热词列表前缀

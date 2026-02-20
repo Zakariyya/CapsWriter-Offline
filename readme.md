@@ -12,7 +12,6 @@
 v2.4新增：
 - **改进 [Fun-ASR-Nano-GGUF](https://github.com/HaujetZhao/Fun-ASR-GGUF) 模型，使 Encoder 支持通过 DML 用显卡（独显、集显均可）加速推理，Encoder 和 CTC 默认改为 FP16 精度，以便更好利用显卡算力**，短音频延迟最低可降至 200ms 以内。
 - 服务端 Fun-ASR-Nano 使用单独的热词文件 hot-server.txt ，只具备建议替换性，而客户端的热词具有强制替换性，二者不再混用
-- 可以在句子的开头或结尾说「逗号、句号、回车」，自动转换为对应标点符号，支持说连续多个回车。
 - Fun-ASR-Nano 加入采样温度，避免极端情况下的因贪婪采样导致的无限复读
 - 服务端字母拼写合并处理
 
@@ -43,7 +42,7 @@ v2.1 新增：
 
 ## ✨ 核心特性
 
--   **语音输入**：按住 `CapsLock键` 或 `鼠标侧键X2` 说话，松开即输入，默认去除末尾逗句号。支持对讲机模式和单击录音模式。
+-   **语音输入**：按住 `CapsLock` 键说话，松开即输入，默认去除末尾逗句号。支持对讲机模式和单击录音模式。
 -   **文件转录**：音视频文件往客户端一丢，字幕 (`.srt`)、文本 (`.txt`)、时间戳 (`.json`) 统统都有。
 -   **数字 ITN**：自动将「十五六个」转为「15~16个」，支持各种复杂数字格式。
 -   **热词语境**：在 `hot-server.txt` 记下专业术语，经音素筛选后，用作 Fun-ASR-Nano 的语境增强识别 
@@ -75,7 +74,7 @@ LLM 角色既可以使用 Ollama 运行的本地模型，又可以用 API 访问
 2.  **下载解压**：下载 [Latest Release](https://github.com/HaujetZhao/CapsWriter-Offline/releases/latest) 里的软件本体，再到 [Models Release](https://github.com/HaujetZhao/CapsWriter-Offline/releases/tag/models) 下载模型压缩包，将模型解压，放入 `models` 文件夹中对应模型的文件夹里。
 3.  **启动服务**：双击 `start_server.exe`，它会自动最小化到托盘菜单。
 4.  **启动听写**：双击 `start_client.exe`，它会自动最小化到托盘菜单。
-5.  **开始录音**：按住 `CapsLock键` 或 `鼠标侧键X2` 就可以说话了！
+5.  **开始录音**：按住 `CapsLock` 就可以说话了！
 
 
 ## 🎤 模型说明
@@ -98,35 +97,25 @@ LLM 角色既可以使用 Ollama 运行的本地模型，又可以用 API 访问
 ## 🛠️ 常见问题
 
 **Q: 为什么按了没反应？**  
-A: 请确认 `start_client.exe` 的黑窗口还在运行。若想在管理员权限运行的程序中输入，也需以管理员权限运行客户端。
+A: 请确认 `start_server.exe` 的黑窗口还在运行。若想在管理员权限运行的程序中输入，也需以管理员权限运行客户端。
 
 **Q: 为什么识别结果没字？**  
 A: 到 `年/月/assets` 文件夹中检查录音文件，看是不是没有录到音；听听录音效果，是不是麦克风太差，建议使用桌面 USB 麦克风；检查麦克风权限。
 
-**Q: 我可以用显卡加速吗？**  
-A: 目前 Fun-ASR-Nano 模型支持显卡加速，且默认开启，Encoder 使用 DirectML 加速，Decoder 使用 Vulkan 加速。但是对于高U低显的集显用户，显卡加速的效果可能还不如CPU，可以到 `config_server.py` 中把 `dml_enable` 或 `vulkan_enable` 设为 False 以禁用显卡加速。Paraformer 和 SenseVoice 本身在 CPU 上就已经超快，用 DirectML 加速反而每次识别会有 200ms 启动开销，因此对它们没有开启显卡加速。
-
-**Q: 低性能电脑转录太慢？**  
-A:  
-1. 对于短音频，`Fun-ASR-Nano` 在独显上可以 200~300ms 左右转录完毕，`sensevoice` 或 `paraformer` 在 CPU 上可以 100ms 左右转录完毕，这是参考延迟。
-2. 如果 `Fun-ASR-Nano` 太慢，尝试到 `config_server.py` 中把 `dml_enable` 或 `vulkan_enable` 设为 False 以禁用显卡加速。
-3. 如果性能较差，还是慢，就更改 `config_server.py` 中的 `model_type` ，切换模型为 `sensevoice` 或 `paraformer`。
-4. 如果性能太差，连 `sensevoice` 或 `paraformer` 都还是慢，就把 `num_threads` 降低。
-
 **Q: Fun-ASR-Nano 模型几乎不能用？**  
-A: Fun-ASR-Nano 的 LLM Decoder 使用 llama.cpp 默认通过 Vulkan 实现显卡加速，部分集显在 FP16 矩阵计算时没有用 FP32 对加和缓存，可能导致数值溢出，影响识别效果，如果遇到了，可以到 config_server.py 中将 `vulkan_enable` 设为 False ，用 CPU 进行解码。
+A: Fun-ASR-Nano 的 LLM 解码器使用 llama.cpp 默认通过 Vulkan 实现显卡加速，部分集显在 FP16 矩阵计算时没有用 FP32 对加和缓存，可能导致数值溢出，影响识别效果，如果遇到了，可以到 config_server.py 中关闭 Vulkan，用 CPU 进行解码。
 
 **Q: 需要热词替换？**  
-A: 服务端 Fun-ASR-Nano 会参考 `hot-server.txt` 进行语境增强识别；客户端则会根据 `hot.txt` 的相似度匹配或 `hot-rule.txt` 的正则规则，执行强制替换。若启用了润色，LLM 角色可参考 `hot-rectify.txt` 中的纠错历史。
+A: 可在 `hot.txt` 中添加正确词汇（托盘菜单右键有快捷添加），或者在 `hot-rule.txt` 中用正则表达式强制替换。
 
 **Q: 如何使用 LLM 角色？**  
 A: 只需要在语音的**开头**说出角色名。例如，你配置了一个名为「翻译」的角色，录音时说「翻译，今天天气好」，翻译角色就会接手识别结果，在翻译后输出。它就像是一个随时待命的插件，你喊它名字，它就干活。你可以配置它们直接打字输出，或者在 TOAST 弹窗中显示。`ESC` 可以中断 LLM 的流式输出。
 
-**Q: LLM 角色模型怎么选？**  
-A: 你可以在 `LLM` 文件夹里为每个角色配置后端。既可以用 Ollama 部署本地轻量模型（如 gemma3:4b, qwen3:4b 等），也可以填写 DeepSeek 等在线大模型的 API Key。
-
 **Q: LLM 角色可以读取屏幕内容？**  
 A: 是的。如果你的 AI 角色开启了 `enable_read_selection`，你可以先用鼠标选中屏幕上的一段文字，然后按住快捷键说：“翻译一下”，LLM 就会识别你的指令，将选中文字进行翻译。但当所选文字与上一次的角色输出完全相同时，则不会提供给角色，以避免浪费 token。
+
+**Q: LLM 角色模型怎么选？**  
+A: 你可以在 `LLM` 文件夹里为每个角色配置后端。既可以用 Ollama 部署本地轻量模型（如 gemma3:4b, qwen3:4b 等），也可以填写 DeepSeek 等在线大模型的 API Key。
 
 **Q: 想要隐藏黑窗口？**  
 A: 点击托盘菜单即可隐藏黑窗口。
@@ -134,6 +123,11 @@ A: 点击托盘菜单即可隐藏黑窗口。
 **Q: 如何开机启动？**  
 A: `Win+R` 输入 `shell:startup` 打开启动文件夹，将服务端、客户端的快捷方式放进去即可。
 
+**Q: 我可以用 GPU 加速吗？**  
+A: 加入 GPU 支持会增加打包大小，且边际效益很低，没有做。但从源码运行可以，把源码中的模型的 provider 改为 cuda 即可。
+
+**Q: 低性能电脑转录太慢？**  
+A: 更改 `config_server.py` 中的 `model_type` 模型类型，或更改 `num_threads`。
 
 ## 🚀 我的其他优质项目推荐
 

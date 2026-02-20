@@ -11,7 +11,8 @@ process = True                          # 是否启用 LLM 处理
 provider = 'ollama'                     # API 提供商：'ollama', 'openai', 'deepseek', 'moonshot', 'zhipu', 'claude', 'gemini'
 api_url = ''                            # 留空则自动使用 provider 对应的默认值
 api_key = ''                            # API Key
-model = 'gemma3:12b'                    # 模型名称
+# model = 'gemma3:12b'                    # 模型名称
+model = 'gemma3:4b'                    # 模型名称
 
 # ==================== 上下文管理 ====================
 max_context_length = 4096               # 最大上下文长度（token 数）
@@ -25,7 +26,7 @@ enable_read_selection = True            # 是否启用获取选中文字（通�
 selection_max_length = 2048             # 选中文字最大长度
 
 # ==================== 输出配置 ====================
-output_mode = 'toast'                   # 输出方式：'typing' 直接打字, 'toast' 浮动窗口
+output_mode = 'typing'                   # 输出方式：'typing' 直接打字, 'toast' 浮动窗口
 
 # ==================== Toast 弹窗配置（仅在 output_mode='toast' 时有效） ====================
 toast_initial_width = 0.5               # 窗口初始宽度（0.5 = 50% 屏幕宽度）
@@ -54,7 +55,7 @@ prompt_prefix_input = '用户输入：'       # 用户输入前缀
 
 # ==================== System Prompt ====================
 system_prompt = '''
-你是一个翻译助手，将用户输入的文本翻译成英文。
+你是一个翻译助手，将用户输入的文本翻译成英文，如果提示翻译成中文或者其他别的语言则将其翻译为对应语言，默认为英文。
 
 要求：
 - 只输出翻译结果，不要解释

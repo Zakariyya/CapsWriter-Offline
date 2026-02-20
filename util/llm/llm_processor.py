@@ -9,10 +9,13 @@ LLM 处理引擎
 5. 精确的生成时间统计（从第一个 token 开始）
 """
 import time
+import json
+import re
 from typing import Callable, Optional, Dict, Any, List, Tuple
 from util.llm.llm_role_config import RoleConfig
 from util.llm.llm_interfaces import IContextManager
 from util.llm.llm_client_pool import ClientPool
+from util.mcp import MCPHttpClient
 from util.llm.llm_exceptions import (
     APIException,
     wrap_openai_error, OpenAIErrorWrapper,
@@ -68,6 +71,24 @@ class LLMProcessor:
 
         try:
             logger.debug("开始调用 LLM API（流式）")
+
+            # MCP 工具调用（仅对启用的角色生效）
+            if role_config.enable_mcp and (role_config.mcp_base_url or role_config.mcp_servers):
+                tools, tool_registry = self._build_mcp_tools(role_config)
+                if tools:
+                    request_params['tools'] = tools
+                    request_params['tool_choice'] = 'auto'
+                    return self._stream_request_with_tools(
+                        client,
+                        request_params,
+                        callback,
+                        should_stop_check,
+                        role_config,
+                        context_manager,
+                        messages,
+                        tool_registry
+                    )
+
             return self._stream_request(
                 client,
                 request_params,
@@ -151,6 +172,336 @@ class LLMProcessor:
 
         return request_params
 
+    def _build_mcp_tools(self, role_config: RoleConfig) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        """从多个 MCP 服务获取工具，并转换为 OpenAI tools 结构。
+
+        Returns:
+            (tool_specs, tool_registry) where tool_registry maps tool_name -> {client, original_name}
+        """
+        servers = role_config.mcp_servers or []
+        if not servers and role_config.mcp_base_url:
+            servers = [{
+                "name": "mcp",
+                "base_url": role_config.mcp_base_url,
+                "auth_token": role_config.mcp_auth_token,
+                "timeout": role_config.mcp_timeout,
+                "tool_whitelist": role_config.mcp_tool_whitelist or []
+            }]
+
+        tool_specs: List[Dict[str, Any]] = []
+        tool_registry: Dict[str, Dict[str, Any]] = {}
+        tool_names = []
+
+        for idx, server in enumerate(servers):
+            base_url = server.get("base_url") or ""
+            server_name = server.get("name") or f"mcp{idx+1}"
+            whitelist = server.get("tool_whitelist") or []
+
+            if not base_url:
+                logger.warning(f"MCP 配置缺少 base_url: {server_name}")
+                continue
+            try:
+                mcp_client = MCPHttpClient(
+                    base_url=base_url,
+                    auth_token=server.get("auth_token", ""),
+                    timeout=server.get("timeout", role_config.mcp_timeout),
+                    headers=server.get("headers")
+                )
+                tools = mcp_client.list_tools()
+            except Exception as e:
+                logger.error(f"MCP 工具列表获取失败: {server_name} {e}")
+                continue
+
+            for tool in tools:
+                name = tool.get("name", "")
+                if not name:
+                    continue
+                if whitelist and name not in whitelist:
+                    continue
+
+                final_name = name
+                if final_name in tool_registry:
+                    final_name = f"{server_name}::{name}"
+                    if final_name in tool_registry:
+                        logger.warning(f"MCP 工具名冲突: {name}, 跳过")
+                        continue
+
+                tool_registry[final_name] = {
+                    "client": mcp_client,
+                    "original_name": name
+                }
+                tool_names.append(final_name)
+
+                params = tool.get("inputSchema") or tool.get("schema") or {"type": "object", "properties": {}}
+                desc = tool.get("description", "") or ""
+                if server_name:
+                    desc = f"[{server_name}] {desc}".strip()
+
+                tool_specs.append({
+                    "type": "function",
+                    "function": {
+                        "name": final_name,
+                        "description": desc,
+                        "parameters": params
+                    }
+                })
+
+        if tool_specs:
+            logger.info(f"MCP 工具已加载: {len(tool_specs)}")
+            logger.debug(f"MCP 工具列表: {tool_names}")
+        else:
+            logger.warning("MCP 工具列表为空")
+
+        return tool_specs, tool_registry
+
+    def _stream_request_with_tools(
+        self,
+        client: Any,
+        request_params: Dict[str, Any],
+        callback: Optional[Callable[[str], None]],
+        should_stop_check: Optional[Callable[[], bool]],
+        role_config: RoleConfig,
+        context_manager: Optional[IContextManager],
+        messages: List[Dict[str, str]],
+        tool_registry: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> Tuple[str, int, float]:
+        """流式请求（支持一次 MCP 工具调用）"""
+        # 允许有限轮次的工具调用
+        max_rounds = 2
+        round_idx = 0
+        current_messages = messages
+        current_params = dict(request_params)
+        current_params['stream'] = True
+
+        while True:
+            round_idx += 1
+            full_response, total_tokens, generation_time, tool_calls = self._stream_collect(
+                client, current_params, callback, should_stop_check
+            )
+
+            if not tool_calls:
+                logger.info("模型未触发 MCP 工具调用")
+                if role_config.enable_history and context_manager:
+                    user_msg = next((m for m in reversed(current_messages) if m.get('role') == 'user'), None)
+                    if user_msg:
+                        context_manager.add_message('user', user_msg.get('content', ''))
+                    context_manager.add_message('assistant', full_response)
+                    logger.debug("已更新历史记录")
+                return (full_response.strip(), total_tokens, generation_time)
+
+            if round_idx > max_rounds:
+                logger.warning("达到 MCP 工具调用最大轮次，停止继续调用")
+                return (full_response.strip(), total_tokens, generation_time)
+
+            default_mcp_client = MCPHttpClient(
+                base_url=role_config.mcp_base_url,
+                auth_token=role_config.mcp_auth_token,
+                timeout=role_config.mcp_timeout
+            ) if role_config.mcp_base_url else None
+
+            tool_messages = []
+            for call in tool_calls:
+                name = call["function"].get("name", "")
+                raw_args = call["function"].get("arguments", "")
+                try:
+                    args = json.loads(raw_args) if raw_args else {}
+                except Exception:
+                    args = {"_raw": raw_args}
+
+                try:
+                    result = self._call_mcp_tool(default_mcp_client, name, args, tool_registry)
+                except Exception as e:
+                    result = {"content": [{"type": "text", "text": f"工具调用失败: {e}"}]}
+
+                content_text = self._normalize_mcp_result(result)
+                tool_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": content_text
+                })
+
+            current_messages = current_messages + [{
+                "role": "assistant",
+                "tool_calls": tool_calls,
+                "content": ""
+            }] + tool_messages
+
+            current_params = self._build_request_params(role_config, current_messages)
+            current_params['stream'] = True
+            if 'tools' in request_params:
+                current_params['tools'] = request_params['tools']
+                current_params['tool_choice'] = request_params.get('tool_choice', 'auto')
+
+    @staticmethod
+    def _normalize_mcp_result(result: Any) -> str:
+        """将 MCP 返回值规范化为文本"""
+        if isinstance(result, dict):
+            content = result.get("content")
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        parts.append(item.get("text", ""))
+                if parts:
+                    return "\n".join(parts).strip()
+        try:
+            return json.dumps(result, ensure_ascii=False)
+        except Exception:
+            return str(result)
+
+    def _call_mcp_tool(
+        self,
+        mcp_client: Optional[MCPHttpClient],
+        name: str,
+        args: Dict[str, Any],
+        tool_registry: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> Any:
+        """Try calling MCP tool with name variants."""
+        if not name:
+            raise ValueError("empty tool name")
+        logger.info(f"MCP 调用工具: {name} args_keys={list(args.keys())}")
+
+        client = mcp_client
+        original_name = name
+        if tool_registry and name in tool_registry:
+            entry = tool_registry[name]
+            client = entry.get("client") or client
+            original_name = entry.get("original_name") or name
+
+        if client is None:
+            raise ValueError("MCP client not configured")
+
+        try:
+            return client.call_tool(original_name, args)
+        except Exception as e:
+            alt = None
+            if "_" in original_name:
+                alt = original_name.replace("_", "-")
+            elif "-" in original_name:
+                alt = original_name.replace("-", "_")
+            if alt and alt != original_name:
+                logger.info(f"MCP 工具名尝试替换: {original_name} -> {alt}")
+                return client.call_tool(alt, args)
+            raise e
+
+    def _stream_collect(
+        self,
+        client: Any,
+        request_params: Dict[str, Any],
+        callback: Optional[Callable[[str], None]],
+        should_stop_check: Optional[Callable[[], bool]],
+    ) -> Tuple[str, int, float, List[Dict[str, Any]]]:
+        """Stream once and collect tool calls if present."""
+        stream = client.chat.completions.create(**request_params)
+
+        full_response = ""
+        total_tokens = 0
+        chunk_count = 0
+
+        first_token_time = None
+        generation_start_time = None
+
+        tool_calls_by_index: Dict[int, Dict[str, Any]] = {}
+
+        for chunk in stream:
+            chunk_count += 1
+            if should_stop_check and should_stop_check():
+                logger.debug(f"收到停止信号，当前已接收 {chunk_count} 个 chunks")
+                try:
+                    stream.close()
+                except:
+                    pass
+                break
+
+            delta = chunk.choices[0].delta
+
+            if getattr(delta, 'tool_calls', None):
+                for tc in delta.tool_calls:
+                    idx = getattr(tc, 'index', 0) or 0
+                    entry = tool_calls_by_index.setdefault(idx, {
+                        "id": f"mcp_call_{idx}",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""}
+                    })
+
+                    if getattr(tc, 'id', None):
+                        entry["id"] = tc.id
+                    if getattr(tc, 'type', None):
+                        entry["type"] = tc.type
+                    if getattr(tc, 'function', None):
+                        fn = tc.function
+                        if getattr(fn, 'name', None):
+                            entry["function"]["name"] = fn.name
+                        if getattr(fn, 'arguments', None):
+                            entry["function"]["arguments"] += fn.arguments
+
+            if getattr(delta, 'function_call', None):
+                fc = delta.function_call
+                entry = tool_calls_by_index.setdefault(0, {
+                    "id": "mcp_call_0",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""}
+                })
+                if getattr(fc, 'name', None):
+                    entry["function"]["name"] = fc.name
+                if getattr(fc, 'arguments', None):
+                    entry["function"]["arguments"] += fc.arguments
+
+            if delta.content:
+                content_chunk = delta.content
+                full_response += content_chunk
+
+                if first_token_time is None:
+                    first_token_time = time.time()
+                    generation_start_time = first_token_time
+
+                if callback:
+                    callback(content_chunk)
+
+            if hasattr(chunk, 'usage') and chunk.usage:
+                if hasattr(chunk.usage, 'completion_tokens'):
+                    tokens = chunk.usage.completion_tokens or 0
+                    if tokens > 0:
+                        total_tokens = tokens
+
+        generation_time = 0.0
+        if generation_start_time is not None:
+            generation_time = time.time() - generation_start_time
+
+        if total_tokens == 0 and full_response:
+            from util.llm.llm_constants import estimate_tokens
+            total_tokens = estimate_tokens(full_response)
+
+        tool_calls = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index.keys())]
+        if not tool_calls:
+            tool_calls = self._extract_dsml_tool_calls(full_response)
+
+        return (full_response.strip(), total_tokens, generation_time, tool_calls)
+    @staticmethod
+    def _extract_dsml_tool_calls(text: str) -> List[Dict[str, Any]]:
+        """Parse DeepSeek DSML tool calls including args blocks."""
+        if "<｜DSML｜invoke" not in text:
+            return []
+
+        # Match each invoke block and optional function_args JSON
+        pattern = r"<｜DSML｜invoke\\s+name=\"([^\"]+)\"\\s*>\\s*(?:<｜DSML｜function_args>\\s*(.*?)\\s*</｜DSML｜function_args>)?\\s*</｜DSML｜invoke>"
+        matches = re.findall(pattern, text, flags=re.DOTALL)
+        if not matches:
+            return []
+
+        tool_calls: List[Dict[str, Any]] = []
+        for idx, (name, args_text) in enumerate(matches):
+            args_text = (args_text or "").strip()
+            tool_calls.append({
+                "id": f"mcp_call_dsml_{idx}",
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": args_text
+                }
+            })
+        return tool_calls
+
     def _stream_request(
         self,
         client: Any,
@@ -231,7 +582,9 @@ class LLMProcessor:
         # 更新历史
         if role_config.enable_history and context_manager:
             # 保存完整的用户提示词（包含剪贴板、热词等）
-            context_manager.add_message('user', messages[-1]['content'])
+            user_msg = next((m for m in reversed(messages) if m.get('role') == 'user'), None)
+            if user_msg:
+                context_manager.add_message('user', user_msg.get('content', ''))
             context_manager.add_message('assistant', full_response)
             logger.debug(f"已更新历史记录")
 

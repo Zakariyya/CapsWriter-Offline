@@ -49,6 +49,7 @@ class ToastWindowText(ToastWindowBase):
         duration: int = 3000,
         initial_width: Union[float, int] = 400,
         initial_height: int = 0,
+        initial_y_offset: int = 0,
         streaming: bool = False,
         stop_callback: Optional[Callable[[], None]] = None,
         markdown: bool = False,
@@ -66,6 +67,7 @@ class ToastWindowText(ToastWindowBase):
             duration: 自动关闭时长（毫秒）
             initial_width: 初始宽度，0-1 为屏幕比例，>1 为像素值
             initial_height: 初始高度，0 表示自动计算
+            initial_y_offset: 初始 Y 轴偏移（负值向上）
             streaming: 是否为流式输出模式
             stop_callback: 窗口关闭时的回调函数
             markdown: 是否启用 Markdown 渲染
@@ -74,8 +76,8 @@ class ToastWindowText(ToastWindowBase):
         # 初始化基类
         super().__init__(
             parent_root, text, font_size, font_family, bg, fg,
-            duration, initial_width, initial_height, streaming,
-            stop_callback, markdown, editable
+            duration, initial_width, initial_height, initial_y_offset,
+            streaming, stop_callback, markdown, editable
         )
 
         # 创建字体对象用于计算行高
@@ -134,7 +136,7 @@ class ToastWindowText(ToastWindowBase):
             screen_width = self.window.winfo_screenwidth()
             screen_height = self.window.winfo_screenheight()
             temp_x = (screen_width - calculated_width) // 2
-            temp_y = screen_height // 2
+            temp_y = (screen_height // 2) + self.initial_y_offset
             self.window.geometry(f'{calculated_width}x100+{temp_x}+{temp_y}')
 
             # 强制更新，让 Text 组件按照正确宽度重新计算换行
@@ -189,7 +191,7 @@ class ToastWindowText(ToastWindowBase):
             if initial:
                 # 初始位置：水平居中，顶部在屏幕中间
                 x = (screen_width - window_width) // 2
-                y = screen_height // 2
+                y = (screen_height // 2) + self.initial_y_offset
             else:
                 # 保持当前位置，只更新大小
                 x = self.window.winfo_x()

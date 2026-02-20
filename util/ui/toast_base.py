@@ -84,6 +84,7 @@ class ToastWindowBase(ABC):
         duration: int,
         initial_width: Union[float, int],
         initial_height: int,
+        initial_y_offset: int,
         streaming: bool,
         stop_callback: Optional[Callable[[], None]],
         markdown_enabled: bool,
@@ -101,6 +102,7 @@ class ToastWindowBase(ABC):
             duration: 自动关闭时长（毫秒）
             initial_width: 初始宽度，0-1 为屏幕比例，>1 为像素值
             initial_height: 初始高度，0 表示自动计算
+            initial_y_offset: 初始 Y 轴偏移（负值向上）
             streaming: 是否为流式输出模式
             stop_callback: 窗口关闭时的回调函数
             markdown_enabled: 是否启用 Markdown 渲染
@@ -115,6 +117,7 @@ class ToastWindowBase(ABC):
         self.duration = duration
         self.initial_width = initial_width
         self.initial_height = initial_height
+        self.initial_y_offset = initial_y_offset
         
         # 状态标志
         self.pause = False

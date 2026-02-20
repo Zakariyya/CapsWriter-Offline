@@ -77,6 +77,7 @@ class ToastMessage:
     duration: int = DEFAULT_DURATION_MS
     initial_width: Union[float, int] = DEFAULT_INITIAL_WIDTH
     initial_height: int = 0
+    initial_y_offset: int = 0
     streaming: bool = False
     window_type: Literal['text', 'label'] = 'text'
     stop_callback: Optional[Callable[[], None]] = None
@@ -180,6 +181,7 @@ class ToastMessageManager:
                     msg.duration,
                     msg.initial_width,
                     msg.initial_height,
+                    msg.initial_y_offset,
                     streaming=msg.streaming,
                     stop_callback=msg.stop_callback,
                     markdown=msg.markdown,
